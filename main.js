@@ -323,10 +323,34 @@ ipcMain.on('stop-tunnel', (event, host) => {
     }, 5000);
 });
 
-app.on('window-all-closed', () => {
-    // Si on ferme l'application Electron, on coupe proprement tous les tunnels encore ouverts
+// ─── Fermeture propre — tous les cas (bouton ✕, Cmd+Q, menu Electron) ─────────
+
+function couperTousTunnels() {
+    const { execSync } = require('child_process');
+
     Object.keys(processusActifs).forEach(host => {
-        processusActifs[host].kill();
+        // 1. Tuer le processus Node.js enfant (expect)
+        try { processusActifs[host].kill(); } catch (e) {}
+
+        // 2. S'assurer que le autossh système est aussi tué (kill synchrone avant exit)
+        try {
+            const pids = execSync(
+                `ps aux | grep "autossh" | grep "${host}" | grep -v "grep" | awk '{print $2}'`
+            ).toString().trim();
+            if (pids) pids.split('\n').forEach(pid => { try { execSync(`kill ${pid}`); } catch (e) {} });
+        } catch (e) {}
     });
-    if (process.platform !== 'darwin') app.quit();
-});
+
+    // 3. Nettoyage des scripts expect temporaires restants
+    try {
+        fs.readdirSync(__dirname)
+            .filter(f => f.startsWith('run_') && f.endsWith('.exp'))
+            .forEach(f => { try { fs.unlinkSync(path.join(__dirname, f)); } catch (e) {} });
+    } catch (e) {}
+}
+
+// Se déclenche quelle que soit la façon de quitter (Cmd+Q, menu, programmatique)
+app.on('before-quit', couperTousTunnels);
+
+// Fermeture de la fenêtre → quitter l'app (y compris sur macOS)
+app.on('window-all-closed', () => app.quit());
