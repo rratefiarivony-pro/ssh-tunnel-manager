@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard Tunnels SSH</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <h2>Tableau de Bord des Tunnels</h2>
+    <div class="subtitle">Suivi en temps réel de vos connexions actives (#ssh-tunnel-manager) :</div>
+
+    <div class="tunnel-list" id="tunnels-container">
+        <div style="text-align: center; color: #7f8c8d; padding: 20px;">Analyse du fichier config...</div>
+    </div>
+
+    <!-- Zone mot de passe Keychain -->
+    <div id="password-bar" class="password-bar" style="display:none;">
+        <span id="password-bar-icon" class="pwd-icon">🔑</span>
+        <span id="password-bar-label" class="pwd-label"></span>
+        <div id="password-input-area" class="pwd-input-area" style="display:none;">
+            <input type="password" id="pwd-input" class="form-input pwd-field" placeholder="Mot de passe FedID…" />
+            <button class="btn-save" onclick="savePassword()">Enregistrer</button>
+            <button class="btn-cancel" onclick="hidePwdInput()">Annuler</button>
+        </div>
+        <button id="pwd-change-btn" class="pwd-change-btn" onclick="showPwdInput()">Modifier</button>
+        <button id="pwd-delete-btn" class="pwd-delete-btn" onclick="deletePassword()">Supprimer</button>
+    </div>
+
+    <!-- Panneau éditeur (caché par défaut) -->
+    <div id="editor-panel" class="editor-panel">
+        <div class="editor-header">
+            <span id="editor-title" class="editor-title"></span>
+            <button class="editor-close" onclick="closeEditor()">✕</button>
+        </div>
+        <div class="editor-body">
+            <div class="form-row">
+                <label class="form-label">Bastion (HostName)</label>
+                <input type="text" id="f-hostname" class="form-input" placeholder="bastion.exemple.cloud" />
+            </div>
+            <div class="form-row">
+                <label class="form-label">Utilisateur</label>
+                <input type="text" id="f-user" class="form-input" placeholder="username" />
+            </div>
+            <div class="form-row">
+                <label class="form-label">Port</label>
+                <input type="number" id="f-port" class="form-input form-input-sm" placeholder="22" />
+            </div>
+            <div class="form-section-label">Redirections de ports (LocalForward)</div>
+            <div id="lf-list"></div>
+            <button class="btn-add-lf" onclick="addLocalForwardRow()">＋ Ajouter une redirection</button>
+        </div>
+        <div class="editor-footer">
+            <span id="editor-msg" class="editor-msg"></span>
+            <div class="editor-actions">
+                <button class="btn-cancel" onclick="closeEditor()">Annuler</button>
+                <button class="btn-save" onclick="saveConfig()">💾 Enregistrer</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+        const container = document.getElementById('tunnels-container');
+        const editorPanel = document.getElementById('editor-panel');
+
+        const loadingHosts     = new Set();
+        const autoReconnectBDDs = new Set();
+        let currentEditingHost  = null;
+
+        // ── Parsing du nom de host ──────────────────────────────────────────
+        function parseHost(name) {
+            const withoutSuffix = name.replace(/-tunnel$/, '');
+            const parts = withoutSuffix.split('-');
+            if (parts.length < 2) return { bdd: name, env: '' };
+            const env = parts[parts.length - 1];
+            const bdd = parts.slice(0, parts.length - 1).join('-');
+            return { bdd, env };
+        }
+
+        // ── Construction d'une cellule env (bouton + crayon) ───────────────
+        function buildEnvCell(tunnel) {
+            const { env } = parseHost(tunnel.name);
+            const isLoading = loadingHosts.has(tunnel.name);
+
+            let dotClass, actionEvent;
+            if (tunnel.active)          { dotClass = 'dot dot-active';        actionEvent = 'stop-tunnel';   }
+            else if (tunnel.deconnecte) { dotClass = 'dot dot-disconnected';  actionEvent = 'launch-tunnel'; }
+            else                        { dotClass = 'dot dot-inactive';       actionEvent = 'launch-tunnel'; }
+
+            const cell = document.createElement('div');
+            cell.className = 'env-cell';
+
+            // Bouton principal (statut + action)
+            const btn = document.createElement('button');
+            btn.className = 'env-btn';
+            btn.dataset.host   = tunnel.name;
+            btn.dataset.action = actionEvent;
+            btn.disabled = isLoading;
+            btn.innerHTML = isLoading
+                ? `<span class="spinner"></span> ${env.toUpperCase()}`
+                : `<span class="${dotClass}"></span> ${env.toUpperCase()}`;
+
+            btn.addEventListener('click', () => {
+                loadingHosts.add(tunnel.name);
+                btn.disabled = true;
+                btn.innerHTML = `<span class="spinner"></span> ${env.toUpperCase()}`;
+                ipcRenderer.send(btn.dataset.action, tunnel.name);
+                setTimeout(() => { loadingHosts.delete(tunnel.name); renderDashboard(); }, 1400);
+            });
+
+            // Bouton crayon
+            const editBtn = document.createElement('button');
+            editBtn.className = 'edit-btn';
+            editBtn.title = `Éditer la configuration de ${tunnel.name}`;
+            editBtn.textContent = '✎';
+            editBtn.addEventListener('click', () => openEditor(tunnel.name));
+
+            cell.appendChild(btn);
+            cell.appendChild(editBtn);
+            return cell;
+        }
+
+        // ── Reconnexion auto ───────────────────────────────────────────────
+        function autoReconnect(tunnel, btn) {
+            if (loadingHosts.has(tunnel.name)) return;
+            loadingHosts.add(tunnel.name);
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<span class="spinner"></span> ${parseHost(tunnel.name).env.toUpperCase()}`;
+            }
+            ipcRenderer.send('launch-tunnel', tunnel.name);
+            setTimeout(() => { loadingHosts.delete(tunnel.name); renderDashboard(); }, 1400);
+        }
+
+        // ── Dashboard ──────────────────────────────────────────────────────
+        async function renderDashboard() {
+            const result = await ipcRenderer.invoke('get-ssh-hosts-with-status');
+            container.innerHTML = '';
+
+            if (!result.success) {
+                container.innerHTML = `<div class="error-msg">⚠️ Erreur : ${result.error}</div>`;
+                resizeWindow(); return;
+            }
+            if (result.hosts.length === 0) {
+                container.innerHTML = '<div style="text-align:center;padding:16px;color:#6c757d;">Aucun tunnel configuré trouvé.</div>';
+                resizeWindow(); return;
+            }
+
+            const groups = {};
+            result.hosts.forEach(tunnel => {
+                const { bdd } = parseHost(tunnel.name);
+                if (!groups[bdd]) groups[bdd] = [];
+                groups[bdd].push(tunnel);
+            });
+
+            Object.entries(groups).forEach(([bdd, tunnels], idx) => {
+                const row = document.createElement('div');
+                row.className = 'bdd-row' + (idx > 0 ? ' bdd-row-separator' : '');
+
+                const label = document.createElement('span');
+                label.className = 'bdd-label';
+                label.textContent = bdd.toUpperCase();
+                row.appendChild(label);
+
+                const envGroup = document.createElement('div');
+                envGroup.className = 'env-group';
+
+                tunnels.forEach(tunnel => {
+                    const cell = buildEnvCell(tunnel);
+                    envGroup.appendChild(cell);
+                    if (tunnel.deconnecte && autoReconnectBDDs.has(bdd)) {
+                        const btn = cell.querySelector('.env-btn');
+                        autoReconnect(tunnel, btn);
+                    }
+                });
+
+                row.appendChild(envGroup);
+
+                const autoLabel = document.createElement('label');
+                autoLabel.className = 'auto-reconnect-label';
+                autoLabel.title = 'Reconnexion automatique si coupure';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = autoReconnectBDDs.has(bdd);
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) autoReconnectBDDs.add(bdd);
+                    else autoReconnectBDDs.delete(bdd);
+                });
+                autoLabel.appendChild(checkbox);
+                autoLabel.insertAdjacentHTML('beforeend', ' ↺ auto');
+                row.appendChild(autoLabel);
+                container.appendChild(row);
+            });
+
+            resizeWindow();
+        }
+
+        function resizeWindow() {
+            requestAnimationFrame(() => {
+                ipcRenderer.send('resize-window', document.body.scrollHeight);
+            });
+        }
+
+        // ── Éditeur ────────────────────────────────────────────────────────
+        async function openEditor(host) {
+            currentEditingHost = host;
+            const { bdd, env } = parseHost(host);
+            document.getElementById('editor-title').textContent =
+                `✎  Édition — ${bdd.toUpperCase()} › ${env.toUpperCase()}`;
+            document.getElementById('editor-msg').textContent = '';
+
+            const result = await ipcRenderer.invoke('get-host-config', host);
+            if (!result.success) {
+                alert('Erreur : ' + result.error);
+                return;
+            }
+            const c = result.config;
+            document.getElementById('f-hostname').value = c.hostname;
+            document.getElementById('f-user').value     = c.user;
+            document.getElementById('f-port').value     = c.port;
+
+            const list = document.getElementById('lf-list');
+            list.innerHTML = '';
+            c.localForwards.forEach(lf => addLocalForwardRow(lf.label, lf.local, lf.remote));
+
+            editorPanel.classList.add('editor-panel-visible');
+            resizeWindow();
+        }
+
+        function closeEditor() {
+            editorPanel.classList.remove('editor-panel-visible');
+            currentEditingHost = null;
+            resizeWindow();
+        }
+
+        function addLocalForwardRow(label = '', local = '', remote = '') {
+            const list = document.getElementById('lf-list');
+            const row  = document.createElement('div');
+            row.className = 'lf-row';
+            row.innerHTML = `
+                <input type="text" class="form-input lf-label" placeholder="Label (optionnel)" value="${escHtml(label)}" />
+                <div class="lf-ports">
+                    <input type="text" class="form-input lf-local"  placeholder="127.0.0.1:5432" value="${escHtml(local)}" />
+                    <span class="lf-arrow">→</span>
+                    <input type="text" class="form-input lf-remote" placeholder="host.rds.amazonaws.com:5432" value="${escHtml(remote)}" />
+                    <button class="btn-remove-lf" title="Supprimer" onclick="this.closest('.lf-row').remove(); resizeWindow();">✕</button>
+                </div>
+            `;
+            list.appendChild(row);
+            resizeWindow();
+        }
+
+        async function saveConfig() {
+            if (!currentEditingHost) return;
+
+            const hostname = document.getElementById('f-hostname').value.trim();
+            const user     = document.getElementById('f-user').value.trim();
+            const port     = document.getElementById('f-port').value.trim();
+
+            const localForwards = [];
+            document.querySelectorAll('#lf-list .lf-row').forEach(row => {
+                const label  = row.querySelector('.lf-label').value.trim();
+                const local  = row.querySelector('.lf-local').value.trim();
+                const remote = row.querySelector('.lf-remote').value.trim();
+                if (local && remote) localForwards.push({ label, local, remote });
+            });
+
+            const msgEl = document.getElementById('editor-msg');
+            msgEl.textContent = '';
+            msgEl.className   = 'editor-msg';
+
+            const result = await ipcRenderer.invoke('save-host-config', currentEditingHost, {
+                hostname, user, port, localForwards
+            });
+
+            if (result.success) {
+                msgEl.textContent = '✓ Enregistré';
+                msgEl.classList.add('editor-msg-ok');
+                setTimeout(closeEditor, 900);
+            } else {
+                msgEl.textContent = '⚠ ' + result.error;
+                msgEl.classList.add('editor-msg-err');
+            }
+        }
+
+        function escHtml(str) {
+            return String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // ── Gestion mot de passe Keychain ──────────────────────────────────
+        async function initPasswordBar() {
+            const hasPassword = await ipcRenderer.invoke('has-password');
+            const bar   = document.getElementById('password-bar');
+            const label = document.getElementById('password-bar-label');
+            bar.style.display = 'flex';
+            if (hasPassword) {
+                label.textContent = 'Mot de passe bastion : enregistré dans le Trousseau';
+                label.className = 'pwd-label pwd-label-ok';
+                document.getElementById('pwd-change-btn').style.display = '';
+                document.getElementById('pwd-delete-btn').style.display = '';
+            } else {
+                label.textContent = 'Aucun mot de passe configuré — les tunnels ne pourront pas se connecter';
+                label.className = 'pwd-label pwd-label-warn';
+                document.getElementById('pwd-change-btn').textContent = 'Configurer';
+                document.getElementById('pwd-change-btn').style.display = '';
+                document.getElementById('pwd-delete-btn').style.display = 'none';
+                showPwdInput();
+            }
+            resizeWindow();
+        }
+
+        function showPwdInput() {
+            document.getElementById('password-input-area').style.display = 'flex';
+            document.getElementById('pwd-input').focus();
+            resizeWindow();
+        }
+
+        function hidePwdInput() {
+            document.getElementById('password-input-area').style.display = 'none';
+            document.getElementById('pwd-input').value = '';
+            resizeWindow();
+        }
+
+        async function savePassword() {
+            const pwd = document.getElementById('pwd-input').value;
+            if (!pwd) return;
+            const result = await ipcRenderer.invoke('set-password', pwd);
+            if (result.success) { hidePwdInput(); await initPasswordBar(); }
+            else alert('Erreur : ' + result.error);
+        }
+
+        async function deletePassword() {
+            if (!confirm('Supprimer le mot de passe du Trousseau ?')) return;
+            await ipcRenderer.invoke('delete-password');
+            await initPasswordBar();
+        }
+
+        // Si un tunnel essaie de se lancer sans mot de passe configuré
+        ipcRenderer.on('password-required', () => {
+            initPasswordBar();
+            showPwdInput();
+        });
+
+        // Permettre Entrée dans le champ mot de passe
+        document.getElementById('pwd-input').addEventListener('keydown', e => {
+            if (e.key === 'Enter') savePassword();
+        });
+
+        setInterval(renderDashboard, 15000);
+        initPasswordBar();
+        renderDashboard();
+    </script>
+</body>
+</html>

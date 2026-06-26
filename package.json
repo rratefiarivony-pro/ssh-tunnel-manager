@@ -1,0 +1,15 @@
+{
+  "name": "ssh-tunnel-manager-node",
+  "version": "1.0.0",
+  "description": "SSH Tunnel Manager avec Node.js",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0"
+  }
+}

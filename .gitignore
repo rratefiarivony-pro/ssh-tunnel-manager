@@ -1,0 +1,24 @@
+# Dépendances
+node_modules/
+
+# Fichiers sensibles — ne jamais committer
+password.txt
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Scripts expect temporaires générés à l'exécution
+run_*.exp
+
+# Copilot / skills
+.agents/
+skills-lock.json
+
+# Logs et fichiers système
+*.log
+.DS_Store
+
+# Fichiers de build Electron
+dist/
+out/
