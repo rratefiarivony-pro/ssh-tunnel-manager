@@ -4,7 +4,7 @@
   "description": "SSH Tunnel Manager avec Node.js",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "NODE_OPTIONS= electron ."
   },
   "dependencies": {
     "keytar": "^7.9.0"
