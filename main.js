@@ -239,7 +239,7 @@ ipcMain.handle('get-ssh-hosts-with-status', async () => {
     }
 });
 
-// 2. Lancer le tunnel DIRECTEMENT dans le terminal actuel (qui a fait npm start)
+// 2. Lancer le tunnel directement depuis l'application et afficher ses sorties dans le terminal actuel
 ipcMain.on('launch-tunnel', async (event, host) => {
     let password = await keytar.getPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
 
@@ -257,47 +257,44 @@ ipcMain.on('launch-tunnel', async (event, host) => {
             return;
         }
     }
-    const scriptPath = path.join(__dirname, `run_${host}.exp`);
-
-    const expectScriptContent = `#!/usr/bin/expect -f
-set timeout -1
+    const expectScriptContent = `set timeout -1
 spawn autossh -M 0 -N ${host}
 expect {
-    "*password:*" { send "${password}\\r"; exp_continue }
+    "*password:*" {
+        if {[gets stdin password] < 0} { exit 1 }
+        send -- "$password\\r"
+        exp_continue
+    }
     eof
 }
 `;
 
     try {
-        fs.writeFileSync(scriptPath, expectScriptContent, 'utf-8');
-        fs.chmodSync(scriptPath, '755');
-
-        // On lance le processus en arrière-plan sous Node.js mais rattaché au terminal d'origine
-        // 'spawn' permet de garder une référence sur le processus pour le couper plus tard
         const { spawn } = require('child_process');
-        const enfant = spawn(scriptPath, [], {
-            stdio: 'inherit' // Déporte les entrées/sorties textuelles directement dans ton iTerm actuel !
+        // Le script Expect reste en mémoire ; le mot de passe est transmis séparément via stdin.
+        const enfant = spawn('expect', ['-c', expectScriptContent], {
+            stdio: ['pipe', 'inherit', 'inherit'] // Conserve les sorties dans le terminal d'origine.
         });
 
-        // On garde le processus en mémoire pour pouvoir l'arrêter au clic sur le bouton
+        // On garde le processus en mémoire pour pouvoir l'arrêter au clic sur le bouton.
         processusActifs[host] = enfant;
 
-        // Si le tunnel se coupe tout seul (ex: erreur réseau)
+        // Si le tunnel se coupe tout seul (ex. : erreur réseau), on marque la coupure.
         enfant.on('close', () => {
             if (processusActifs[host]) {
-                // Clôture inattendue : on marque comme déconnecté
                 tunnelsDeconnectes.add(host);
                 delete processusActifs[host];
             }
-            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
         });
 
+        enfant.stdin.end(`${password}\n`);
+        password = null;
     } catch (error) {
-        console.error("Erreur lors du lancement dans le terminal actuel :", error);
+        console.error("Erreur lors du lancement dans le terminal actuel.");
     }
 });
 
-// 3. Arrêter le tunnel et nettoyer son processus et son fichier
+// 3. Arrêter le tunnel et nettoyer les éventuels scripts .exp historiques
 ipcMain.on('stop-tunnel', (event, host) => {
     // Si on a le processus en mémoire, on lui envoie un signal d'arrêt (SIGTERM)
     if (processusActifs[host]) {
@@ -316,7 +313,7 @@ ipcMain.on('stop-tunnel', (event, host) => {
         }
     });
 
-    // Nettoyage du fichier temporaire
+    // Nettoyage d'un éventuel fichier temporaire créé par une ancienne version
     const scriptPath = path.join(__dirname, `run_${host}.exp`);
     setTimeout(() => {
         if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);

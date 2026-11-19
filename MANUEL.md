@@ -226,6 +226,7 @@ npm start
          ├── Pour chaque tunnel lancé :
          │     lit le mot de passe depuis le Trousseau macOS (keytar)
          │     → spawn expect → autossh -M 0 -N <host>
+         │     transmet le mot de passe au processus expect via stdin
          │     Les sorties (logs) sont redirigées vers le terminal d'origine
          └── IPC avec le renderer (index.html)
                ├── get-ssh-hosts-with-status  →  liste des hôtes + état
@@ -239,4 +240,4 @@ npm start
                └── resize-window              →  adapte la hauteur de la fenêtre
 ```
 
-Les fichiers `.exp` (scripts `expect`) sont créés temporairement dans le dossier de l'application à chaque lancement de tunnel et supprimés automatiquement à l'arrêt.
+Le script `expect` est exécuté en mémoire et le mot de passe lui est transmis via son entrée standard. Aucun fichier contenant le mot de passe n'est créé sur disque.

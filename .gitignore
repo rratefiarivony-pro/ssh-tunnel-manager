@@ -8,7 +8,7 @@ password.txt
 *.p12
 *.pfx
 
-# Scripts expect temporaires générés à l'exécution
+# Anciens scripts expect générés à l'exécution
 run_*.exp
 
 # Copilot / skills
