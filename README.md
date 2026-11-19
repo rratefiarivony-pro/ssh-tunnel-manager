@@ -99,7 +99,7 @@ Si un fichier `password.txt` existait (ancienne méthode), il est migré automat
 npm start
 ```
 
-Cela exécute `electron .` — Electron charge `main.js` comme processus principal et `index.html` comme interface. **Laisser le terminal ouvert** : les sorties des processus `autossh`/`expect` y sont redirigées via `stdio: 'inherit'`.
+Cela exécute `electron .` — Electron charge `main.js` comme processus principal et `index.html` comme interface. **Laisser le terminal ouvert** : les sorties des processus `autossh`/`expect` y sont redirigées vers le terminal. Le mot de passe reste dans le Keychain et est transmis à `expect` via son entrée standard ; aucun script contenant le secret n'est créé sur disque.
 
 ---
 
@@ -135,7 +135,7 @@ main.js
 ├── IPC handlers — tunnels
 │   ├── get-ssh-hosts-with-status     → liste hôtes + statut (actif/inactif/coupé)
 │   ├── launch-tunnel                 → spawn expect → autossh, surveille close()
-│   └── stop-tunnel                   → kill processus + nettoyage fichiers .exp
+│   └── stop-tunnel                   → kill processus + nettoyage d'éventuels anciens .exp
 │
 ├── IPC handlers — configuration SSH
 │   ├── get-host-config               → lit les champs d'un hôte
@@ -191,8 +191,7 @@ Renderer (UI)                    Main process (Node.js)          Système
 clic "lancer"
   → ipcRenderer.send('launch-tunnel', host)
                                  → keytar.getPassword()          → Keychain macOS
-                                 → fs.writeFileSync(run.exp)
-                                 → spawn(run.exp)                → expect → autossh → bastion SSH
+                                 → spawn(expect, -c) + stdin     → autossh → bastion SSH
                                  ← enfant.on('close')
                                    → tunnelsDeconnectes.add(host)
                                    → ipcRenderer.send('password-required') si besoin
