@@ -8,7 +8,7 @@ Application de bureau **Electron** permettant de gérer des tunnels SSH vers un 
 
 | Couche | Technologie |
 |--------|-------------|
-| Runtime desktop | [Electron](https://www.electronjs.org/) v30 |
+| Runtime desktop | [Electron](https://www.electronjs.org/) v45 |
 | Processus principal | Node.js (CommonJS) |
 | Interface utilisateur | HTML5 / CSS3 / JavaScript vanilla |
 | Communication UI ↔ main | Electron IPC (`ipcMain` / `ipcRenderer`) |
@@ -30,7 +30,7 @@ Application de bureau **Electron** permettant de gérer des tunnels SSH vers un 
 
 | Package | Version | Rôle |
 |---------|---------|------|
-| [`electron`](https://www.electronjs.org/) | ^30.0.0 | Framework desktop. Fournit `BrowserWindow`, `ipcMain`, et l'environnement Node.js dans le renderer via `nodeIntegration: true`. |
+| [`electron`](https://www.electronjs.org/) | ^45.4.1 | Framework desktop. Fournit `BrowserWindow`, `ipcMain`, et l'environnement Node.js dans le renderer via `nodeIntegration: true`. |
 
 ### Outils système (non npm)
 
@@ -44,12 +44,12 @@ Application de bureau **Electron** permettant de gérer des tunnels SSH vers un 
 ## Prérequis
 
 - **macOS** (le stockage Keychain est spécifique à macOS)
-- **Node.js** ≥ 18 et **npm**
+- **Node.js** ≥ 22.12.0 et **npm**
 - **Homebrew** pour les outils système
 
 ```bash
 # Vérifier les versions
-node --version   # ≥ 18
+node --version   # ≥ 22.12.0
 npm --version
 
 # Installer les outils système
@@ -100,6 +100,13 @@ npm start
 ```
 
 Cela exécute `electron .` — Electron charge `main.js` comme processus principal et `index.html` comme interface. **Laisser le terminal ouvert** : les sorties des processus `autossh`/`expect` y sont redirigées vers le terminal. Le mot de passe reste dans le Keychain et est transmis à `expect` via son entrée standard ; aucun script contenant le secret n'est créé sur disque.
+
+Si `npm start` affiche `Downloading Electron binary...` puis `TypeError: fetch failed`, le binaire peut manquer, notamment après un nettoyage du cache. Si Node signale `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` alors que le certificat est approuvé dans le trousseau macOS, installez le binaire en utilisant les certificats système (Node.js 22.19+ ou 24.6+) :
+
+```bash
+NODE_OPTIONS=--use-system-ca npm exec --no -- install-electron
+npm start
+```
 
 ---
 
